@@ -1,14 +1,19 @@
 #include <iostream>
 #include <memory>
 #include <vector>
+#define SDL_MAIN_HANDLED
 #include <SDL.h>
 #include <math.h>
+#include <time.h>
+
+static constexpr int WINDOW_WIDTH = 640;
+static constexpr int WINDOW_HEIGHT = 480;
 
 static const uint32_t   g_sample_rate = 44100;
 static float g_sample_time = 1 / (float)g_sample_rate;
 float g_time = 0;
 static SDL_AudioSpec    g_sdl_audio_spec;
-
+static SDL_AudioSpec    g_sdl_obtained_audio_spec;
 
 enum Waveform {
     SINE,
@@ -90,7 +95,7 @@ Tone::Tone()
 
 float Tone::getFrequency(uint8_t octave, ToneName tone)
 {
-    int index = octave * 12 + tone;
+    size_t index = octave * 12 + tone;
     if (index >= frequencies.size()) return 1.0f;
     return frequencies.at(index);
 }
@@ -147,7 +152,7 @@ float Oscillator::getAmplitude(float time)
 
     switch (this->waveform) {
     case SINE:
-        value =  sin(2 * 3.141 * t * this->frequency);
+        value =  sinf(2 * 3.141f * t * this->frequency);
         break;
 
     case TRIANGLE:
@@ -283,7 +288,7 @@ float oscillator(float t, float frequency, Waveform waveform)
 
     switch (waveform) {
     case SINE:
-        value =  sin(2 * 3.141 * t * frequency);
+        value =  sinf(2 * 3.141f * t * frequency);
         break;
 
     case TRIANGLE:
@@ -328,8 +333,10 @@ float oscillator(float t, float frequency, Waveform waveform)
 
 void make_noise(float t, float & sample_l, float & sample_r)
 {
-    //sample_l = sin(2 * 3.141 * t * (440 + 1 * sin(2 * 3.141 * 10 * t)));
-    //sample_r = cos(2 * 3.141 * t * 439);
+    //sample_l = sinf(2 * 3.141f * t * 440);
+    //sample_r = cosf(2 * 3.141f * t * 439);
+    //sample_l = sinf(2 * 3.141f * t * (440 + 1 * sin(2 * 3.141f * 10 * t)));
+    //sample_r = cosf(2 * 3.141f * t * 439);
     sample_l = 0.0f;
     sample_r = 0.0f;
     if (g_adsr != nullptr && g_oscillator != nullptr) {
@@ -344,32 +351,32 @@ void make_noise(float t, float & sample_l, float & sample_r)
     }
 }
 
-void sound_callback(void* arg, uint8_t* streambuf, int bufferlength)
+void sound_fill_buffer_s16lsb(uint8_t* streambuf, int bufferlength)
 {
     int i, bi, num_samples;
     int16_t l_sample = 0, r_sample = 0;
-    
+
     // The format of the byte stream is signed 16-bit samples in little-endian 
     // byte order. Stereo samples are stored in a LRLRLR ordering.
     // sample     |             1             |             2             |...
     // channel    |    left     |    right    |    left     |    right    |...
     // byte order | low  | high | low  | high | low  | high | low  | high |...
     // stream     | [0]  | [1]  | [2]  | [3]  | [4]  | [5]  | [6]  | [7]  |...
-    
+
     // Hence num_samples must be divided by four.
-   
+
     num_samples = bufferlength >> 2;
     bi = 0; // start with byte index at the beginning
 
     float fl, fr;
-    
-    for (i=0; i<num_samples; i++) {
+
+    for (i = 0; i<num_samples; i++) {
         make_noise(g_time, fl, fr);
         g_time += g_sample_time;
 
-        l_sample = fl * 30000;
-        r_sample = fr * 30000;
-        
+        l_sample = (int16_t)(fl * 30000);
+        r_sample = (int16_t)(fr * 30000);
+
         streambuf[bi++] = l_sample & 0x00FF;
         streambuf[bi++] = l_sample >> 8;
         streambuf[bi++] = r_sample & 0x00FF;
@@ -377,12 +384,121 @@ void sound_callback(void* arg, uint8_t* streambuf, int bufferlength)
     }
 }
 
+void sound_fill_buffer_f32lsb(uint8_t* streambuf, int bufferlength)
+{
+    int i, bi, num_samples;
+    int16_t l_sample = 0, r_sample = 0;
+
+    // The format of the byte stream is floating point 32-bit samples in little-endian 
+    // byte order. Stereo samples are stored in a LRLRLR ordering.
+    // sample     |                           1                           |                           2                           |...
+    // channel    |            left           |           right           |            left           |           right           |...
+    // byte order | low  | mlow | mhig | high | low  | mlow | mhig | high | low  | mlow | mhig | high | low  | mlow | mhig | high |...
+    // stream     | [0]  | [1]  | [2]  | [3]  | [4]  | [5]  | [6]  | [7]  | [8]  | [9]  | [A]  | [B]  | [C]  | [D]  | [E]  | [F]  |...
+
+    // Hence num_samples must be divided by eight.
+
+    num_samples = bufferlength >> 3;
+    bi = 0; // start with byte index at the beginning
+
+    union
+    {
+        float f;
+        uint32_t u32;
+    } left, right;
+
+    for (i = 0; i<num_samples; i++) {
+        make_noise(g_time, left.f, right.f);
+        g_time += g_sample_time;
+
+        streambuf[bi++] = (left.u32 & 0x000000FF);
+        streambuf[bi++] = (left.u32 & 0x0000FF00) >> 8;
+        streambuf[bi++] = (left.u32 & 0x00FF0000) >> 16;
+        streambuf[bi++] = (left.u32 & 0xFF000000) >> 24;
+        streambuf[bi++] = (right.u32 & 0x000000FF);
+        streambuf[bi++] = (right.u32 & 0x0000FF00) >> 8;
+        streambuf[bi++] = (right.u32 & 0x00FF0000) >> 16;
+        streambuf[bi++] = (right.u32 & 0xFF000000) >> 24;
+    }
+}
+
+void sound_callback(void* arg, uint8_t* streambuf, int bufferlength)
+{
+    switch (g_sdl_obtained_audio_spec.format) {
+    case AUDIO_S16LSB:
+        sound_fill_buffer_s16lsb(streambuf, bufferlength);
+        break;
+    case AUDIO_F32LSB:
+        sound_fill_buffer_f32lsb(streambuf, bufferlength);
+        break;
+    default:
+        // unsupported sample format
+        memset(streambuf, 0, bufferlength);
+        break;
+    }
+}
+
 SDL_Window* g_window;
 SDL_Renderer* g_renderer;
+
+void logAudioDevices()
+{
+    int i, count = SDL_GetNumAudioDevices(0);
+
+    for (i = 0; i < count; ++i) {
+        SDL_Log("Audio device %d: %s", i, SDL_GetAudioDeviceName(i, 0));
+    }
+}
+
+const char* SDLAudioFormat2String(SDL_AudioFormat f)
+{
+    switch (f) {
+    case AUDIO_S8: return "signed 8 - bit samples";
+    case AUDIO_U8: return "unsigned 8 - bit samples";
+    case AUDIO_S16LSB: return "signed 16 - bit samples in little - endian byte order";
+    case AUDIO_S16MSB: return "signed 16 - bit samples in big - endian byte order";
+    case AUDIO_U16LSB: return "unsigned 16 - bit samples in little - endian byte order";
+    case AUDIO_U16MSB: return "unsigned 16 - bit samples in big - endian byte order";
+    case AUDIO_S32LSB: return "signed 32 - bit integer samples in little - endian byte order";
+    case AUDIO_S32MSB: return "unsigned 32 - bit integer samples in big - endian byte order";
+    case AUDIO_F32LSB: return "32 - bit floating point samples in little - endian byte order";
+    case AUDIO_F32MSB: return "32 - bit floating point samples in big - endian byte order";
+
+    default:
+        SDL_Log("Unknown SDL_AudioFormat %04X", f);
+        return "unknown audio format";
+    }
+}
+
+void logAudioSpec(const char* keyword, SDL_AudioSpec* audio_spec)
+{
+    if (keyword != nullptr) SDL_Log("%s audio spec", keyword);
+    if (audio_spec != nullptr) {
+        SDL_Log("    channels: %d", audio_spec->channels);
+        SDL_Log("    format:   %s", SDLAudioFormat2String(audio_spec->format));
+        SDL_Log("    freq:     %d", audio_spec->freq);
+        SDL_Log("    samples:  %d", audio_spec->samples);
+        SDL_Log("    size:     %d", audio_spec->size);
+    }
+    else {
+        SDL_Log("NULL");
+    }
+}
+
+void log_output(void*           userdata,
+                int             category,
+                SDL_LogPriority priority,
+                const char*     message)
+{
+    puts(message);
+}
 
 void init()
 {
     do {
+        SDL_LogSetOutputFunction(log_output, nullptr); 
+        SDL_LogSetAllPriority(SDL_LOG_PRIORITY_VERBOSE);
+
         if (SDL_Init(SDL_INIT_AUDIO | SDL_INIT_VIDEO) < 0) {
             SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Couldn't initialize SDL: %s", SDL_GetError());
             break;
@@ -391,7 +507,7 @@ void init()
         g_window = SDL_CreateWindow("Soundtest",
                                         SDL_WINDOWPOS_CENTERED,
                                         SDL_WINDOWPOS_CENTERED,
-                                        640, 480,
+                                        WINDOW_WIDTH, WINDOW_HEIGHT,
                                         SDL_WINDOW_SHOWN);
         if (g_window == nullptr) {
             std::cerr << "SDL_CreateWindow() failed! " << SDL_GetError() << std::endl;
@@ -406,20 +522,22 @@ void init()
 
         SDL_SetRenderDrawBlendMode(g_renderer, SDL_BLENDMODE_BLEND);
 
+        logAudioDevices();
+
         g_sdl_audio_spec.freq = g_sample_rate;
         g_sdl_audio_spec.format = AUDIO_S16;
         g_sdl_audio_spec.channels = 2;
         g_sdl_audio_spec.samples = 2048;
         g_sdl_audio_spec.callback = (SDL_AudioCallback)sound_callback;
         g_sdl_audio_spec.userdata = NULL;
-
-        SDL_AudioSpec obtainedSpec;
+        logAudioSpec("wanted", &g_sdl_audio_spec);
 
         // initialize audio
-        if (SDL_OpenAudio(&g_sdl_audio_spec, &obtainedSpec) < 0) {
+        if (SDL_OpenAudio(&g_sdl_audio_spec, &g_sdl_obtained_audio_spec) < 0) {
             SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Couldn't open audio: %s", SDL_GetError());
             break;
         }
+        logAudioSpec("obtained", &g_sdl_obtained_audio_spec);
         SDL_PauseAudio(1);
 
     } while (0);
@@ -436,7 +554,7 @@ void drawWaveform(Waveform wf)
     const int N = 100;
     float interval = 1.0f / ((float)N * f);
 
-    int sx = 0, sy = 240;
+    int sx = 0, sy = WINDOW_HEIGHT / 2; // axis crosspoint (0/0) of the waveform diagram in the window
     float time = 0.0f;
 
     int last_x = sx;
@@ -444,7 +562,7 @@ void drawWaveform(Waveform wf)
     for (int i=0; i<4*N; i++)
     {
         int x = sx + 160 * i / N;
-        int y = sy - 200 * oscillator(time, f, wf);
+        int y = (int)(sy - 200 * oscillator(time, f, wf));
         drawLine(last_x, last_y, x, y);
         time += interval;
         last_x = x;
@@ -456,8 +574,8 @@ void drawWaveform(Waveform wf)
 void noteOn(uint8_t octave, Tone::ToneName tone)
 {
     if (g_adsr->isOn(g_time)) return;
-    float freq = g_tone.getFrequency(octave, tone);
-    g_oscillator->setFrequency(freq);
+    g_freq = g_tone.getFrequency(octave, tone);
+    g_oscillator->setFrequency(g_freq);
     g_adsr->noteOn(g_time);
     g_oscillator->noteOn(g_time);
 }
@@ -478,9 +596,9 @@ int main(void)
     g_oscillator = std::shared_ptr<Oscillator>(new Oscillator());
     g_adsr = std::shared_ptr<ADSR>(new ADSR(0.1f, 0.2f, 0.4f, 0.4f));
     g_wf = SINE;
-    g_freq = 0.0f;
-    srand(time(NULL));
+    g_freq = 1.0f;
 
+    srand((unsigned int)time(NULL));
     init();
 
     SDL_Event event;
@@ -493,8 +611,8 @@ int main(void)
         SDL_SetRenderDrawColor(g_renderer, 255, 255, 255, 255);
         drawWaveform(g_wf);
         SDL_RenderPresent(g_renderer);
-        //SDL_WaitEventTimeout(&event, 10);
-        while (SDL_PollEvent(&event)) {
+        
+        while (SDL_WaitEventTimeout(&event, 10)) {
             switch (event.type) {
             case SDL_KEYDOWN:
                 switch (event.key.keysym.sym) {
@@ -516,8 +634,9 @@ int main(void)
                     break;
                 case SDLK_5:
                     g_wf = NOISE;
-                    if (g_oscillator != nullptr) g_oscillator->setWaveform(SAWTOOTH);
+                    if (g_oscillator != nullptr) g_oscillator->setWaveform(NOISE);
                     break;
+
                 case SDLK_y: noteOn(4, Tone::ToneName::C); break;
                 case SDLK_x: noteOn(4, Tone::ToneName::D); break;
                 case SDLK_c: noteOn(4, Tone::ToneName::E); break;
@@ -526,6 +645,9 @@ int main(void)
                 case SDLK_n: noteOn(4, Tone::ToneName::A); break;
                 case SDLK_m: noteOn(4, Tone::ToneName::H); break;
                 case SDLK_COMMA: noteOn(5, Tone::ToneName::C); break;
+
+                case SDLK_ESCAPE: running = false; break;
+
                 default: break;
                 }
                 break;
