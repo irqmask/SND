@@ -1,17 +1,19 @@
 #include <iostream>
 #include <memory>
 #include <vector>
-#define SDL_MAIN_HANDLED
-#include <SDL.h>
+
 #include <math.h>
 #include <time.h>
+
+#define SDL_MAIN_HANDLED
+#include <SDL.h>
 
 static constexpr int WINDOW_WIDTH = 640;
 static constexpr int WINDOW_HEIGHT = 480;
 
 static const uint32_t   g_sample_rate = 44100;
 static float g_sample_time = 1 / (float)g_sample_rate;
-float g_time = 0;
+float g_time = 0.0f;
 static SDL_AudioSpec    g_sdl_audio_spec;
 static SDL_AudioSpec    g_sdl_obtained_audio_spec;
 
@@ -64,14 +66,14 @@ Tone::Tone()
     frequencies.clear();
     frequencies.resize(10*12);
 
-    double f = 440.0;
+    double f = 440.0f;
     // calculate from C-0 to G#-4
     for (uint8_t i=0; i<(48+9); i++) {
         f /= twelfthroot_of_two;
         frequencies.at(56 - i) = (float)f;
     }
 
-    frequencies.at(57) = 440.0;
+    frequencies.at(57) = 440.0f;
 
     // calculate from A#-4 to H-9
     f = 440.0;
@@ -251,7 +253,7 @@ bool ADSR::isOn(float time)
 
 float ADSR::getAmplitude(float time)
 {
-    if (time_on < 0.001) {
+    if (time_on < 0.001f) {
         return 0.0f;
     }
 
@@ -470,7 +472,7 @@ const char* SDLAudioFormat2String(SDL_AudioFormat f)
     }
 }
 
-void logAudioSpec(const char* keyword, SDL_AudioSpec* audio_spec)
+void logAudioSpec(const char* keyword, const SDL_AudioSpec* audio_spec)
 {
     if (keyword != nullptr) SDL_Log("%s audio spec", keyword);
     if (audio_spec != nullptr) {
